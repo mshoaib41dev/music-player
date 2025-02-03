@@ -1,18 +1,16 @@
-import React, {useRef, useEffect} from 'react';
+import React, {useRef, useEffect, useCallback} from 'react';
 import {StyleSheet, View} from 'react-native';
 import {WebView} from 'react-native-webview';
 import TrackPlayer, {Capability} from 'react-native-track-player';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import axiosInstance from '../api/axiosInatnce';
 
 let _url = '';
 let playing = false;
 
-console.log({_url});
-
 const MusicPlayer = () => {
   const webViewRef = useRef(null);
 
+  // Set up the player once
   useEffect(() => {
     const setupPlayer = async () => {
       try {
@@ -26,12 +24,12 @@ const MusicPlayer = () => {
             Capability.SeekTo,
           ],
           compactCapabilities: [Capability.Play, Capability.Pause],
-          // notificationCapabilities: [
-          //   Capability.Play,
-          //   Capability.Pause,
-          //   Capability.SkipToNext,
-          //   Capability.SkipToPrevious,
-          // ],
+          notificationCapabilities: [
+            Capability.Play,
+            Capability.Pause,
+            Capability.SeekTo,
+            Capability.SkipToNext,
+          ],
         });
       } catch (error) {
         console.error('Error setting up TrackPlayer:', error);
@@ -41,161 +39,158 @@ const MusicPlayer = () => {
     setupPlayer();
 
     return () => {
-      TrackPlayer.destroy();
+      TrackPlayer?.destroy();
     };
   }, []);
+
+  // Fetch music data based on URL
   const getMusicData = async url => {
     try {
-      console.log('FUNCTION');
-      const response = await axiosInstance.get(`related-posts/?url=${url}`);
-      console.log('Music Data Response', response);
-      const musicData = response?.data.related_streams.map(item => ({
+      const response = await axiosInstance.get(
+        `related-posts/?url=${encodeURIComponent(url)}`,
+      );
+
+      const allSongs = response?.data.related_streams;
+
+      const currentSongIndex = allSongs.findIndex(
+        item => item.stream_url === url,
+      );
+
+      console.log({currentSongIndex});
+      const remainingSongs = allSongs.length - currentSongIndex;
+      const dynamicLength = Math.min(remainingSongs, 25);
+      const nextSongs = allSongs.slice(
+        currentSongIndex,
+        currentSongIndex + dynamicLength,
+      );
+
+      console.log(nextSongs.length);
+
+      const musicData = nextSongs.map(item => ({
         id: item.post_id,
         url: item.stream_url,
         artwork: item.thumbnail_url,
       }));
-      return musicData; // Return the response data from API
+
+      return musicData;
     } catch (error) {
       console.error('Error fetching data:', error.response || error.message);
-      throw error; // Handle errors as needed
-    }
-  };
-  const injectedJavaScript = `
-    (function() {
-      // Listen to all audio elements
-      // document.body.style.backgroundColor = 'red'; 
-      const audioElements = document.querySelectorAll('audio');
-      // setTimeout(function() { window.alert(audio) }, 2000);
-
-      audioElements.forEach(audio => {
-        // Post message when audio starts playing
-
-        audio.addEventListener('play', () => {
-          const state = {
-            src: audio.src,
-            currentTime: audio.currentTime,
-            duration: audio.duration,
-            state: 'playing',
-          };
-          window.ReactNativeWebView.postMessage(JSON.stringify(state));
-        });
-
-        // Post message when audio pauses
-        audio.addEventListener('pause', () => {
-          const state = {
-            src: audio.src,
-            currentTime: audio.currentTime,
-            duration: audio.duration,
-            state: 'paused',
-          };
-          window.ReactNativeWebView.postMessage(JSON.stringify(state));
-        });
-      });
-
-      // Attempt to autoplay the first audio element
-      const firstAudio = document.querySelector('audio');
-      if (firstAudio) {
-        firstAudio.play().catch(error => {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ error: error.message }));
-        });
-      }
-    })();
-    true; // Ensure script completion
-  `;
-  const saveUrl = async url => {
-    try {
-      await AsyncStorage.setItem('currentUrl', url);
-    } catch (error) {
-      console.error('Error saving URL to AsyncStorage:', error);
+      throw error;
     }
   };
 
-  const getUrl = async () => {
-    try {
-      return await AsyncStorage.getItem('currentUrl');
-    } catch (error) {
-      console.error('Error retrieving URL from AsyncStorage:', error);
-      return null;
-    }
-  };
-  useEffect(() => {
-    const fetchUrl = async () => {
-      try {
-        const url = await getUrl(); // Replace with your async function
-        console.log('Fetched URL:', url);
-      } catch (error) {
-        console.error('Error fetching URL:', error);
-      }
-    };
-
-    fetchUrl(); // Call the async function
-  }, []); // Dependency array
-
-  const handleMessage = async event => {
-    try {
-      const message = JSON.parse(event.nativeEvent.data);
-      const url = message?.src || null;
-      const state = message?.state || null;
-      const currentTime = message?.currentTime || null;
-
-      if (!url) {
-        console.warn('No URL received from WebView.');
-        return;
-      }
-
-      // Retrieve the previous URL from AsyncStorage
-      const previousUrl = await getUrl();
-
-      if (previousUrl !== url) {
-        // Save the new URL
-        saveUrl(url);
-
-        if (state !== 'paused') {
-          playing = true;
-          await playSong(url); // Play the new track
-        }
-      } else {
-        if (state === 'paused') {
-          playing = false;
-          await TrackPlayer.pause();
-        } else if (state === 'playing' && !playing) {
-          playing = true;
-          await TrackPlayer.play();
-          if (currentTime) {
-            await TrackPlayer.seekTo(currentTime); // Sync playback position
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error in handleMessage:', error);
-    }
-  };
-
-  const playSong = async url => {
-    console.log({url});
-
+  // Play the song with the fetched data
+  const playSong = useCallback(async musicData => {
     try {
       await TrackPlayer.reset(); // Reset the player
-      const music = await getMusicData();
-      await TrackPlayer.add(music);
+      await TrackPlayer.add(musicData); // Add music tracks
       await TrackPlayer.play(); // Start playback
     } catch (error) {
       console.error('Error playing song:', error);
     }
+  }, []);
+
+  // Handle the WebView messages and track the song state
+  const handleMessage = async event => {
+    try {
+      let songObj = JSON.parse(event?.nativeEvent?.data);
+      let url = songObj?.src;
+
+      if (url && url !== _url) {
+        _url = url;
+        const musicData = await getMusicData(url); // Fetch the music data
+
+        console.log({musicData});
+        await playSong(musicData); // Play the song
+      }
+    } catch (error) {
+      console.error('Error parsing message:', error);
+    }
   };
+
+  // Injected JavaScript for WebView to track audio and send messages
+  const injectedJavaScript = `
+    (function() {
+      let currentPageUrl = window.location.href;
+      let hasSentAudioData = false;
+      let audioFound = false;
+      let currentAudioSrc = '';
+      let intervalId;
+
+      function sendAudioSrc() {
+        const audio = document.querySelector('audio');
+        if (audio && audio.src && audio.src !== currentAudioSrc) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            src: audio.src,
+            state: 'playing',
+            currentTime: audio.currentTime
+          }));
+          hasSentAudioData = true;
+          audioFound = true;
+          currentAudioSrc = audio.src;
+          clearInterval(intervalId);
+        } else {
+          if (!hasSentAudioData) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              src: '',
+              state: 'stopped',
+              currentTime: 0
+            }));
+          }
+        }
+      }
+
+      function checkInitialAudio() {
+        sendAudioSrc();
+      }
+
+      function startAudioCheckLoop() {
+        intervalId = setInterval(() => {
+          sendAudioSrc();
+        }, 500);
+      }
+
+      checkInitialAudio();
+      startAudioCheckLoop();
+
+      document.body.addEventListener('click', function() {
+        audioFound = false;
+        hasSentAudioData = false;
+        clearInterval(intervalId);
+        currentAudioSrc = '';
+        startAudioCheckLoop();
+      });
+
+      function checkForPageChange() {
+        if (window.location.href !== currentPageUrl) {
+          currentPageUrl = window.location.href;
+          audioFound = false;
+          hasSentAudioData = false;
+          currentAudioSrc = '';
+          clearInterval(intervalId);
+          startAudioCheckLoop();
+        }
+      }
+
+      setInterval(checkForPageChange, 500);
+
+      true;
+    })();
+  `;
+
   return (
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
-        source={{uri: 'https://prettylightslive.com'}}
+        source={{uri: 'https://prettylightslive.com/station/2024-12-07-live-boston/?muted=true'}}
         onMessage={handleMessage}
         style={styles.webView}
         startInLoadingState={true}
         cacheEnabled={false}
         injectedJavaScript={injectedJavaScript}
-        // allowsInlineMediaPlayback={true}
-        // mediaPlaybackRequiresUserAction={false}
         javaScriptEnabled={true}
+        onError={e => console.log('WebView Error:', e.nativeEvent)}
+        onHttpError={e => console.log('HTTP Error:', e.nativeEvent)}
       />
     </View>
   );
