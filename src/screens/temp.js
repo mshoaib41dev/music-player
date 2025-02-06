@@ -1,5 +1,5 @@
 import React, {useRef, useEffect, useCallback} from 'react';
-import {ActivityIndicator, StyleSheet, View} from 'react-native';
+import {StyleSheet, View} from 'react-native';
 import {WebView} from 'react-native-webview';
 import TrackPlayer, {Capability, State, Event} from 'react-native-track-player';
 import axiosInstance from '../api/axiosInatnce';
